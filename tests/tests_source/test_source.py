@@ -42,12 +42,11 @@ for bitflip in config.arr_bitflip:
                         init_coefs = None
 
                     start = time.time()
-                    circuit = config.TestCircuit(
+                    circuit = iqp.IqpSimulator(
                         config.n_qubits,
                         gates,
                         spin_sym=spin_sym,
                         init_gates=init_gates,
-                        init_coefs=init_coefs,
                         sparse=sparse,
                         bitflip=bitflip,
                     )
@@ -63,6 +62,7 @@ for bitflip in config.arr_bitflip:
                         op,
                         config.n_samples,
                         key,
+                        init_coefs,
                         max_batch_samples=config.max_batch_samples,
                         max_batch_ops=config.max_batch_ops
                     )
@@ -72,7 +72,8 @@ for bitflip in config.arr_bitflip:
                     expval_penn = tests.penn_op_expval(
                         circuit,
                         params_init,
-                        op
+                        op,
+                        init_coefs
                     )
                     print(f"Pennylane op_expval: {time.time() - start:.4f} s")
                     
@@ -87,6 +88,7 @@ for bitflip in config.arr_bitflip:
                         config.n_ops,
                         config.n_samples,
                         key,
+                        init_coefs,
                         max_batch_samples=config.max_batch_samples,
                         max_batch_ops=config.max_batch_ops
                     )
@@ -97,7 +99,8 @@ for bitflip in config.arr_bitflip:
                         circuit,
                         params_init,
                         training_set,
-                        config.sigma
+                        config.sigma,
+                        init_coefs
                     )
                     print(f"Pennylane MMD loss: {time.time() - start:.4f} s")
                     
@@ -110,6 +113,7 @@ for bitflip in config.arr_bitflip:
                         "n_ops": config.n_ops,
                         "n_samples": config.n_samples,
                         "key": key,
+                        "init_coefs": init_coefs,
                         "max_batch_samples": config.max_batch_samples,
                         "max_batch_ops": config.max_batch_ops,
                     }
