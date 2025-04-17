@@ -12,7 +12,7 @@ class IqpSimulator:
     """ Class that creates an IqpSimulator object corresponding to a parameterized IQP circuit"""
 
     def __init__(self, n_qubits: int, gates: list, device: str = "lightning.qubit",
-                 spin_sym: bool = False, init_gates: list = None, init_coefs: list = None,
+                 spin_sym: bool = False, init_gates: list = None,
                  sparse: bool = False, bitflip: bool = False):
         """
         Args:
@@ -24,9 +24,7 @@ class IqpSimulator:
             spin_sym (bool, optional): If True, the circuit is equivalent to one where the initial state
                 1/sqrt(2)(|00...0> + |11...1>) is used in place of |00...0>.
             init_gates (list[list[list[int]]], optional): A specification of gates of the same form as the gates argument. The
-                parameters of these gates are kept fixed according to init_coefs.
-            init_coefs (list[float], optional): List or array of length len(init_gates) that specifies the fixed parameter
-                values of init_gates.
+                parameters of these gates will be defined by init_coefs later on.
             sparse (bool, optional): If True, generators and ops are always stored in sparse matrix format, leading
                 to better memory efficiency and potentially faster runtime.
             bitflip (bool, optional): If True, the circuit is equivalent to a classical stochastic model where the
@@ -34,14 +32,12 @@ class IqpSimulator:
 
         Raises:
             Exception: when gates and params have a different number of elements.
-            Exception: when init_gates and init_coefs have a different number of elements.
         """
         self.n_qubits = n_qubits
         self.gates = gates
         self.n_gates = len(gates)
         self.sparse = sparse
         self.init_gates = init_gates
-        self.init_coefs = jnp.array(init_coefs) if init_coefs is not None else None
         self.device = device
         self.spin_sym = spin_sym
         self.bitflip = bitflip
@@ -51,9 +47,6 @@ class IqpSimulator:
 
         len_gen_init = 0
         if self.init_gates is not None:
-
-            if len(self.init_coefs) != len(self.init_gates):
-                raise ValueError("init_gates and init_coefs must both have the same number of elements")
 
             len_gen_init = sum(1 for gate in self.init_gates for _ in gate)
 
@@ -113,21 +106,22 @@ class IqpSimulator:
 
         if self.init_gates is not None:
             # Matrix that transforms the static parameters (initial coefficients) into a vector of size generators so it can be summed with the variational parameters
-            trans_coef = np.zeros((len_gen, len(self.init_gates)))
+            self.trans_coef = np.zeros((len_gen, len(self.init_gates)))
             i = len(self.generators) - len_gen_init
             for j, gens in enumerate(self.init_gates):
                 for gen in gens:
-                    trans_coef[i, j] = 1
+                    self.trans_coef[i, j] = 1
                     i += 1
-            trans_coef = jnp.array(trans_coef)
+            self.trans_coef = jnp.array(self.trans_coef)
 
-            self.init_trans_coef = trans_coef @ self.init_coefs
 
-    def iqp_circuit(self, params: jnp.ndarray):
+    def iqp_circuit(self, params: jnp.ndarray, init_coefs: list = None):
         """IQP circuit in pennylane form.
 
         Args:
             params (jnp.ndarray): The parameters of the IQP gates.
+            init_coefs (list[float], optional): List or array of length len(init_gates) that specifies the fixed parameter
+                values of init_gates.
         """
 
         if self.spin_sym:
@@ -137,7 +131,7 @@ class IqpSimulator:
             qml.Hadamard(i)
 
         if self.init_gates is not None:
-            for par, gate in zip(self.init_coefs, self.init_gates):
+            for par, gate in zip(init_coefs, self.init_gates):
                 for gen in gate:
                     qml.MultiRZ(2*par, wires=gen)
 
@@ -148,12 +142,14 @@ class IqpSimulator:
         for i in range(self.n_qubits):
             qml.Hadamard(i)
 
-    def sample(self, params: jnp.ndarray, shots: int = 1) -> jnp.ndarray:
+    def sample(self, params: jnp.ndarray, init_coefs: list = None, shots: int = 1) -> jnp.ndarray:
         """Sample the IQP circuit using state vector simulation in Pennylane.
         Only possible for circuits with small numbers of qubits.
 
         Args:
             params (jnp.ndarray): The parameters of the IQP gates.
+            init_coefs (list[float], optional): List or array of length len(init_gates) that specifies the fixed parameter
+                values of init_gates.
             shots (int): Number of samples that are output. Defaults to 1.
 
         Returns:
@@ -167,7 +163,7 @@ class IqpSimulator:
                     sample = (sample+1) % 2 if np.random.rand() > 0.5 else sample
 
                 if self.init_gates is not None:
-                    for par, gate in zip(self.init_coefs, self.init_gates):
+                    for par, gate in zip(init_coefs, self.init_gates):
                         for gen in gate:
                             if np.random.rand() < jnp.sin(par) ** 2:
                                 sample[gen] = sample[gen]+1
@@ -186,16 +182,18 @@ class IqpSimulator:
 
             @qml.qnode(dev)
             def sample_circuit(params):
-                self.iqp_circuit(params)
+                self.iqp_circuit(params, init_coefs)
                 return qml.sample(wires=range(self.n_qubits))
             return sample_circuit(params)
 
-    def probs(self, params: jnp.ndarray) -> jnp.ndarray:
+    def probs(self, params: jnp.ndarray, init_coefs: list = None) -> jnp.ndarray:
         """Returns the probabilities of all possible bitstrings using state vector simulation in
         PennyLane. Only possible for circuits with small numbers of qubits.
 
         Args:
             params (jnp.ndarray): The parameters of the IQP gates.
+            init_coefs (list[float], optional): List or array of length len(init_gates) that specifies the fixed parameter
+                values of init_gates.
 
         Returns:
             jnp.ndarray: Probabilities of all possible bitstrings.
@@ -208,12 +206,12 @@ class IqpSimulator:
 
         @qml.qnode(dev)
         def probs_circuit(params):
-            self.iqp_circuit(params)
+            self.iqp_circuit(params, init_coefs)
             return qml.probs(wires=range(self.n_qubits))
         return probs_circuit(params)
 
     def __op_expval_indep(self, params: jnp.ndarray, ops: jnp.ndarray,
-                          n_samples: int, key: Array, return_samples) -> list:
+                          n_samples: int, key: Array, return_samples, init_coefs: list = None) -> list:
         """
         Batch evaluate an array of ops in the same way as self.op_expval_batch, but using independent randomness
         for each estimator. The estimators for each op are therefore uncorrelated.
@@ -222,7 +220,7 @@ class IqpSimulator:
         def update(carry, op):
             key1, key2 = jax.random.split(carry, 2)
             expval = self.op_expval_batch(
-                params, op, n_samples, key1, False, return_samples)
+                params, op, n_samples, key1, init_coefs, False, return_samples)
             return key2, expval
 
         if self.sparse:
@@ -250,7 +248,7 @@ class IqpSimulator:
                 return op_expvals[0], op_expvals[1]
 
     def op_expval_batch(self, params: jnp.ndarray, ops: jnp.ndarray, n_samples: int,
-                        key: Array, indep_estimates: bool = False,
+                        key: Array, init_coefs: list = None, indep_estimates: bool = False,
                         return_samples: bool = False) -> list:
         """Estimate the expectation values of a batch of Pauli-Z type operators. A set of l operators must be specified
         by an array of shape (l,n_qubits), where each row is a binary vector that specifies on which qubit a Pauli Z
@@ -264,6 +262,8 @@ class IqpSimulator:
             ops (jnp.ndarray): Operator/s for those we want to know the expected value.
             n_samples (int): Number of samples used to calculate the IQP expectation value.
             key (Array): Jax key to control the randomness of the process.
+            init_coefs (list[float], optional): List or array of length len(init_gates) that specifies the fixed parameter
+                values of init_gates.
             indep_estimates (bool): Whether to use independent estimates of the ops in a batch (takes longer).
             return_samples (bool): if True, an extended array that contains the values of the estimator for each
                 of the n_samples samples is returned.
@@ -271,14 +271,14 @@ class IqpSimulator:
         Returns:
             list: List of Vectors. The expected value of each op and its standard deviation.
         """
-
+        
         if indep_estimates and not self.bitflip:
-            return self.__op_expval_indep(params, ops, n_samples, key, return_samples)
+            return self.__op_expval_indep(params, ops, n_samples, key, return_samples, init_coefs)
 
         samples = jax.random.randint(key, (n_samples, self.n_qubits), 0, 2)
-
+        
         effective_params = self.trans_par @ params if self.par_transform else params
-        effective_params = effective_params + self.init_trans_coef if self.init_gates is not None else effective_params
+        effective_params = effective_params + self.trans_coef @ init_coefs if self.init_gates is not None else effective_params
 
         if self.bitflip:
 
@@ -376,7 +376,7 @@ class IqpSimulator:
         else:
             return jnp.mean(expvals, axis=-1), jnp.std(expvals, axis=-1, ddof=1)/jnp.sqrt(n_samples)
 
-    def op_expval(self, params: jnp.ndarray, ops: jnp.ndarray, n_samples: int, key: Array,
+    def op_expval(self, params: jnp.ndarray, ops: jnp.ndarray, n_samples: int, key: Array, init_coefs: list = None,
                   indep_estimates: bool = False, return_samples: bool = False,
                   max_batch_ops: int = None, max_batch_samples: int = None) -> list:
         """Estimate the expectation values of a batch of Pauli-Z type operators. A set of l operators must be specified
@@ -394,6 +394,8 @@ class IqpSimulator:
             n_samples (int): Number of samples used to calculate the IQP expectation values. Higher values result in
                 higher precision.
             key (Array): Jax key to control the randomness of the process.
+            init_coefs (list[float], optional): List or array of length len(init_gates) that specifies the fixed parameter
+                values of init_gates.
             indep_estimates (bool): Whether to use independent estimates of the ops in a batch.
             return_samples (bool): if True, an extended array that contains the values of the estimator for each
                 of the n_samples samples is returned.
@@ -421,13 +423,15 @@ class IqpSimulator:
         else:
             expvals = jnp.empty((0, n_samples))
 
+        init_coefs = jnp.array(init_coefs) if init_coefs is not None else None
+        
         for batch_ops in jnp.array_split(ops, np.ceil(ops.shape[0] / max_batch_ops)):
             tmp_expvals = jnp.empty((len(batch_ops), 0))
             for i in range(np.ceil(n_samples / max_batch_samples).astype(jnp.int64)):
                 batch_n_samples = min(max_batch_samples, n_samples - i * max_batch_samples)
                 key, subkey = jax.random.split(key, 2)
                 batch_expval = self.op_expval_batch(
-                    params, batch_ops, batch_n_samples, subkey,
+                    params, batch_ops, batch_n_samples, subkey, init_coefs,
                     indep_estimates, return_samples=True
                 )
                 tmp_expvals = jnp.concatenate((tmp_expvals, batch_expval), axis=-1)

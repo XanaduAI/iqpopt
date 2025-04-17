@@ -22,33 +22,37 @@ def penn_obs(op: np.ndarray) -> qml.operation.Observable:
                 obs @= qml.Z(i)
     return obs
 
-def penn_op_expval_circ(iqp_circuit, params: np.ndarray, op: np.ndarray) -> qml.measurements.ExpectationMP:
+def penn_op_expval_circ(iqp_circuit, params: np.ndarray, op: np.ndarray, init_coefs: list = None) -> qml.measurements.ExpectationMP:
     """Defines the circuit that calculates the expectation value of the operator with the IQP circuit with pennylane tools.
 
     Args:
         params (np.ndarray): The parameters of the IQP gates.
         op (np.ndarray): Bitstring representation of the Z operator.
+        init_coefs (list[float], optional): List or array of length len(init_gates) that specifies the fixed parameter
+                values of init_gates.
 
     Returns:
         qml.measurements.ExpectationMP: Pennylane circuit with an expectation value.
     """
-    iqp_circuit.iqp_circuit(params)
+    iqp_circuit.iqp_circuit(params, init_coefs)
     obs = penn_obs(op)
     return qml.expval(obs)
 
-def penn_op_expval(iqp_circuit, params: np.ndarray, op: np.ndarray) -> float:
+def penn_op_expval(iqp_circuit, params: np.ndarray, op: np.ndarray, init_coefs: list = None) -> float:
     """Calculates the expectation value of the operator with the IQP circuit with pennylane tools.
 
     Args:
         params (np.ndarray): The parameters of the IQP gates.
         op (np.ndarray): Bitstring representation of the Z operator.
+        init_coefs (list[float], optional): List or array of length len(init_gates) that specifies the fixed parameter
+                values of init_gates.
 
     Returns:
         float: Expectation value.
     """
     dev = qml.device(iqp_circuit.device, wires=iqp_circuit.n_qubits)
     penn_op_expval_exe = qml.QNode(penn_op_expval_circ, dev)
-    return penn_op_expval_exe(iqp_circuit, params, op)
+    return penn_op_expval_exe(iqp_circuit, params, op, init_coefs)
 
 def penn_x_circuit(x: np.ndarray):
     """Applies a pennylane circuit in order to initialize the qubits in the state of the bitstring x.
@@ -92,13 +96,15 @@ def penn_train_expval_dev(iqp_circuit, training_set: np.ndarray, op: np.ndarray)
     tr_train /= len(training_set)
     return tr_train
 
-def penn_mmd_loss(iqp_circuit, params: np.ndarray, training_set: np.ndarray, sigma: float) -> float:
+def penn_mmd_loss(iqp_circuit, params: np.ndarray, training_set: np.ndarray, sigma: float, init_coefs: list = None) -> float:
     """Calculates the exact MMD Loss for the given IQP circuit with Pennylane tools.
 
     Args:
         params (np.ndarray): The parameters of the IQP gates.
         training_set (np.ndarray): The training set of samples from which we are trying to learn the distribution.
         sigma (float): Sigma parameter, the width of the kernel.
+        init_coefs (list[float], optional): List or array of length len(init_gates) that specifies the fixed parameter
+                values of init_gates.
 
     Returns:
         float: The value of the loss.
@@ -107,7 +113,7 @@ def penn_mmd_loss(iqp_circuit, params: np.ndarray, training_set: np.ndarray, sig
     p_MMD = (1-np.exp(-1/2/sigma))/2
     for op in product([0,1], repeat=iqp_circuit.n_qubits):
         op = np.array(op)
-        tr_iqp = penn_op_expval(iqp_circuit, params, op)
+        tr_iqp = penn_op_expval(iqp_circuit, params, op, init_coefs)
         tr_train = penn_train_expval_dev(iqp_circuit, training_set, op)
         loss += (1-p_MMD)**(iqp_circuit.n_qubits-op.sum()) * p_MMD**op.sum() * (tr_iqp*tr_iqp - 2*tr_iqp*tr_train + tr_train*tr_train)
     return loss

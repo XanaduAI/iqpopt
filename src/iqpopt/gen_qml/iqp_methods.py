@@ -9,7 +9,7 @@ from ..iqp_optimizer import IqpSimulator
 from .utils import gaussian_kernel
 
 def loss_estimate_iqp(params: jnp.ndarray, iqp_circuit: IqpSimulator, ground_truth: jnp.ndarray, visible_ops: jnp.ndarray,
-                      all_ops: jnp.ndarray, n_samples: int, key: Array, indep_estimates: bool = False, sqrt_loss: bool = False,
+                      all_ops: jnp.ndarray, n_samples: int, key: Array, init_coefs: list = None, indep_estimates: bool = False, sqrt_loss: bool = False,
                       return_expvals: bool = False, max_batch_ops: int = None, max_batch_samples: int = None) -> float:
     """Estimates the MMD Loss of an IQP circuit with respect to a ground truth distribution.
 
@@ -21,6 +21,8 @@ def loss_estimate_iqp(params: jnp.ndarray, iqp_circuit: IqpSimulator, ground_tru
         all_ops (jnp.ndarray): Matrix with the all the operators as rows (0s and 1s). Used to estimate the IQP part of the loss.
         n_samples (jnp.ndarray): Number of samples used to estimate the loss.
         key (Array): Jax key to control the randomness of the process.
+        init_coefs (list[float], optional): List or array of length len(init_gates) that specifies the fixed parameter
+                values of init_gates.
         indep_estimates (bool, optional): Whether to use independent estimates of the ops in a batch (takes longer). Defaults to False.
         sqrt_loss (bool, optional): Whether to use the square root of the MMD^2 loss. Note estiamtes will no longer be unbiased. Defaults to False.
         return_expvals (bool, optional): Whether to return the expectation values of the IQP circuit or return the loss. Defaults to False.
@@ -30,7 +32,7 @@ def loss_estimate_iqp(params: jnp.ndarray, iqp_circuit: IqpSimulator, ground_tru
     Returns:
         float: The value of the loss.
     """
-    tr_iqp_samples = iqp_circuit.op_expval(params, all_ops, n_samples, key, indep_estimates, return_samples=True,
+    tr_iqp_samples = iqp_circuit.op_expval(params, all_ops, n_samples, key, init_coefs, indep_estimates, return_samples=True,
                                            max_batch_ops=max_batch_ops, max_batch_samples=max_batch_samples)
     correction = jnp.mean(tr_iqp_samples**2, axis=-1)/n_samples
     tr_iqp = jnp.mean(tr_iqp_samples, axis=-1)
@@ -50,8 +52,8 @@ def loss_estimate_iqp(params: jnp.ndarray, iqp_circuit: IqpSimulator, ground_tru
     return res
 
 
-def mmd_loss_iqp(params: jnp.ndarray, iqp_circuit: IqpSimulator, ground_truth: jnp.ndarray, sigma: float or list, n_ops: int,
-                 n_samples: int, key: Array, wires: list = None, indep_estimates: bool = False, jit: bool = True,
+def mmd_loss_iqp(params: jnp.ndarray, iqp_circuit: IqpSimulator, ground_truth: jnp.ndarray, sigma: float | list, n_ops: int,
+                 n_samples: int, key: Array, init_coefs: list = None, wires: list = None, indep_estimates: bool = False, jit: bool = True,
                  sqrt_loss: bool = False, return_expvals: bool = False, max_batch_ops: int = None, max_batch_samples: int = None) -> float:
     """Returns an estimate of the (squared) MMD Loss of an IQP circuit with respect to a ground truth
      distribution. Requires a set of samples from the ground truth distribution. The estimate is unbiased in the sense
@@ -70,6 +72,8 @@ def mmd_loss_iqp(params: jnp.ndarray, iqp_circuit: IqpSimulator, ground_truth: j
         n_ops (int): Number of operators used to estimate the loss.
         n_samples (jnp.ndarray): Number of samples used to estimate the loss.
         key (jax.random.PRNGKey): Jax PRNG key used to seed random functions.
+        init_coefs (list[float], optional): List or array of length len(init_gates) that specifies the fixed parameter
+                values of init_gates.
         wires (list, optional): List of qubit positions that specifies the qubits whose measurement statistics are
             used to estimate the MMD loss. The remaining qubits will be traced out. Defaults to None, meaning all
             qubits are used.
@@ -87,6 +91,7 @@ def mmd_loss_iqp(params: jnp.ndarray, iqp_circuit: IqpSimulator, ground_truth: j
     """
 
     sigmas = [sigma] if isinstance(sigma, (int, float)) else sigma
+    init_coefs = jnp.array(init_coefs) if init_coefs is not None else None
 
     if n_samples <= 1:
         raise ValueError("n_samples must be greater than 1")
@@ -120,7 +125,7 @@ def mmd_loss_iqp(params: jnp.ndarray, iqp_circuit: IqpSimulator, ground_truth: j
             else:
                 loss = loss_estimate_iqp
 
-        losses.append(loss(params, iqp_circuit, ground_truth, visible_ops, all_ops, n_samples, key, indep_estimates,
+        losses.append(loss(params, iqp_circuit, ground_truth, visible_ops, all_ops, n_samples, key, init_coefs, indep_estimates,
                       sqrt_loss, return_expvals=return_expvals, max_batch_ops=max_batch_ops, max_batch_samples=max_batch_samples))
 
     if return_expvals:
@@ -130,7 +135,7 @@ def mmd_loss_iqp(params: jnp.ndarray, iqp_circuit: IqpSimulator, ground_truth: j
 
 
 def exp_kgel_iqp(iqp_circuit: IqpSimulator, params: jnp.ndarray, witnesses: jnp.ndarray, sigma: float, n_ops: int,
-                 n_samples: int, key: Array, wires: list = None, indep_estimates=False,
+                 n_samples: int, key: Array, init_coefs: list = None, wires: list = None, indep_estimates=False,
                  max_batch_ops: int = None, max_batch_samples: int = None) -> jnp.ndarray:
     """Calculates the right hand side of the kernel generalized empirical likelihood  (KGEL)
     (see equation 6 in https://arxiv.org/pdf/2306.09780).
@@ -143,6 +148,8 @@ def exp_kgel_iqp(iqp_circuit: IqpSimulator, params: jnp.ndarray, witnesses: jnp.
         n_ops (int): Number of operators used to calculate the IQP expectation value.
         n_samples (int): Number of samples used to calculate the IQP expectation value.
         key (Array): Jax key to control the randomness of the process.
+        init_coefs (list[float], optional): List or array of length len(init_gates) that specifies the fixed parameter
+                values of init_gates.
         wires (list): List of qubits positions where the operators will be measured. The rest will be traced away.
             Defaults to None, which refers to using all qubits.
         indep_estimates (bool): Whether to use independent estimates of the ops in a batch (takes longer).
@@ -174,14 +181,14 @@ def exp_kgel_iqp(iqp_circuit: IqpSimulator, params: jnp.ndarray, witnesses: jnp.
     ops = jnp.insert(rand_ops, idx, 0, axis=1)
 
     key, subkey = jax.random.split(key)
-    tr_iqp = iqp_circuit.op_expval(params, ops, n_samples, subkey, indep_estimates,
+    tr_iqp = iqp_circuit.op_expval(params, ops, n_samples, subkey, init_coefs, indep_estimates,
                                    max_batch_ops=max_batch_ops, max_batch_samples=max_batch_samples)[0]
     coefs = 1 - 2 * ((witnesses @ ops.T) % 2)
     return jnp.mean(tr_iqp * coefs, axis=1)
 
 
 def kgel_opt_iqp(iqp_circuit: IqpSimulator, params: jnp.ndarray, witnesses: jnp.ndarray, ground_truth: jnp.ndarray,
-                 sigma: float, n_ops: int, n_samples: int, key: Array, verbose: bool = True,
+                 sigma: float, n_ops: int, n_samples: int, key: Array, init_coefs: list = None, verbose: bool = True,
                  wires: list = None, indep_estimates=False, max_batch_ops: int = None, max_batch_samples: int = None) -> list:
     """Calculates the right hand side of the kernel generalized empirical likelihood  (KGEL)
     (see equation 6 in https://arxiv.org/pdf/2306.09780). Uses cvxpy to solve the convex optimization problem.
@@ -197,6 +204,8 @@ def kgel_opt_iqp(iqp_circuit: IqpSimulator, params: jnp.ndarray, witnesses: jnp.
         n_ops (int): Number of operators used to calculate the IQP expectation value.
         n_samples (int): Number of samples used to calculate the IQP expectation value.
         key (Array): Jax key to control the randomness of the process.
+        init_coefs (list[float], optional): List or array of length len(init_gates) that specifies the fixed parameter
+                values of init_gates.
         verbose (bool, optional): Controls if the process is going to output information aboutt the optimization to the console. Defaults to True.
         wires (list, optional):List of qubit positions that specifies the qubits whose measurement statistics are
             used to estimate the KGEL. The remaining qubits will be traced out. Defaults to None, meaning all
@@ -221,7 +230,7 @@ def kgel_opt_iqp(iqp_circuit: IqpSimulator, params: jnp.ndarray, witnesses: jnp.
 
     test_kernels = jnp.array(
         [list(map(partial(gaussian_kernel, sigma, s), witnesses)) for s in ground_truth])
-    constraints = pi @ test_kernels - exp_kgel_iqp(iqp_circuit, params, witnesses, sigma, n_ops, n_samples, key,
+    constraints = pi @ test_kernels - exp_kgel_iqp(iqp_circuit, params, witnesses, sigma, n_ops, n_samples, key, init_coefs,
                                                    wires=wires, indep_estimates=indep_estimates,
                                                    max_batch_ops=max_batch_ops, max_batch_samples=max_batch_samples)
 
