@@ -61,9 +61,9 @@ One can also specify some gates to have fixed, non-trainable parameters. For exa
 [//]: # (Non-trainable gates can be specified by the optional arguments `init_gates` and `init_coefs`. For example,)
 
 ```python
-circuit = iqp.IqpSimulator(n_qubits, [[[0]],[[1]]], init_gates = [[[0,1]]], init_coefs=[0.5])
+circuit = iqp.IqpSimulator(n_qubits, [[[0]],[[1]]], init_gates = [[[0,1]]])
 ```
-defines a circuit with two trainable gates with generators $X_0$ and $X_1$ and specifies that a gate with generator $X_0X_1$ and fixed parameter 0.5 should be applied at the start of the circuit. 
+defines a circuit with two trainable gates with generators $X_0$ and $X_1$ and one non-trainable gate with generator $X_0X_1$ that will be applied at the start of the circuit. When evaluating the expectation value of the circuit, both parameters for the trainable gates (`params`) and parameters for the non-trainable ones (`init_coefs`) have to be specified.
 
 > **Note**: For very large problems it can be useful to initialize the circuit with the option `sparse=True`. 
 > This uses scipy sparse matrix multiplication in place of JAX and can be significantly more memory efficient.
@@ -215,7 +215,5 @@ test_data = X_test[:-n_witness] #test data for KGEL
 kgel, p_kgel = gen.kgel_opt_iqp(circuit, params, witness_points, test_data, 
                              sigma, n_ops=1000, n_samples=1000, key=jax.random.PRNGKey(42))
 ```
-The parameter `repeats` increases the precision of the estimation of the mean embeddings used in the definition
-of the KGEL. In practice one often needs a high precision in order for the KGEL optimization to succeed. 
 
 `p_kgel` is the optimal probability distribution returned from the convex optimization.
