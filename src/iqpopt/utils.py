@@ -226,7 +226,7 @@ def initialize_from_data(gates_list: list, data: jnp.array, scale=-1, param_nois
 
 ##### CIRCUIT ANALYSIS FUNCTIONS #######
 
-def construct_convariance_matrix(circuit, params, n_samples, key, indep_estimates=False,
+def construct_convariance_matrix(circuit, params, n_samples, key, init_coefs: list = None, indep_estimates=False,
                                  max_batch_ops=None, max_batch_samples=None):
     """
     Construct the covariance matrix of an IQP cicuit.
@@ -235,6 +235,8 @@ def construct_convariance_matrix(circuit, params, n_samples, key, indep_estimate
         params (jnp.ndarray): The parameters of the IQP gates.
         n_samples (int): Number of samples used to calculate the IQP expectation values.
         key (Array): Jax key to control the randomness of the process.
+        init_coefs (list[float], optional): List or array of length len(init_gates) that specifies the fixed parameter
+                values of init_gates.
         indep_estimates (bool): Whether to use independent estimates of the ops in a batch (takes longer). Defaults to False.
         max_batch_ops (int): Maximum number of operators in a batch of op_expval. Defaults to None.
         max_batch_samples (int): Maximum number of samples in a batch of op_expval. Defaults to None.
@@ -245,7 +247,7 @@ def construct_convariance_matrix(circuit, params, n_samples, key, indep_estimate
     ops_lists = [[[i, j]]
                  for i in range(circuit.n_qubits) for j in range(i + 1)]
     ops = np.concatenate(gate_lists_to_arrays(ops_lists, circuit.n_qubits))
-    expvals = circuit.op_expval(params, ops, n_samples, key, indep_estimates=indep_estimates,
+    expvals = circuit.op_expval(params, ops, n_samples, key, init_coefs, indep_estimates=indep_estimates,
                                 max_batch_ops=max_batch_ops, max_batch_samples=max_batch_samples)[0]
     expval_mat = np.zeros((circuit.n_qubits, circuit.n_qubits))
     count = 0
