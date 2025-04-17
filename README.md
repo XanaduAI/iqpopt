@@ -61,7 +61,7 @@ One can also specify some gates to have fixed, non-trainable parameters. For exa
 [//]: # (Non-trainable gates can be specified by the optional arguments `init_gates` and `init_coefs`. For example,)
 
 ```python
-circuit = iqp.IqpSimulator(n_qubits, [[[0]],[[1]]], init_gates = [[[0,1]]])
+circuit = iqp.IqpSimulator(n_qubits, gates = [[[0]],[[1]]], init_gates = [[[0,1]]])
 ```
 defines a circuit with two trainable gates with generators $X_0$ and $X_1$ and one non-trainable gate with generator $X_0X_1$ that will be applied at the start of the circuit. When evaluating the expectation value of the circuit, both parameters for the trainable gates (`params`) and parameters for the non-trainable ones (`init_coefs`) have to be specified.
 
