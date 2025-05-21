@@ -1,5 +1,4 @@
 from jax._src.typing import Array
-from ray import state
 from scipy.sparse import csr_matrix, dok_matrix
 import pennylane as qml
 import jax.numpy as jnp
@@ -197,7 +196,7 @@ class IqpSimulator:
     def op_expval_pennylane(self, params: jnp.ndarray, op: jnp.array, init_state: list = None,
                             init_coefs: list = None) -> float:
         """
-        Compute the exact expectation value of a Z-type operator via Pennylane. i
+        Compute the exact expectation value of a Z-type operator via Pennylane.
         Args:
             params (jnp.ndarray): The parameters of the IQP gates.
             op (jnp.ndarray): bitstring array that defines the Pauli-Z word operator.
