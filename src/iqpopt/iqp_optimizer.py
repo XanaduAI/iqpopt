@@ -1,4 +1,5 @@
 from jax._src.typing import Array
+from ray import state
 from scipy.sparse import csr_matrix, dok_matrix
 import pennylane as qml
 import jax.numpy as jnp
@@ -11,8 +12,7 @@ from . import utils
 class IqpSimulator:
     """ Class that creates an IqpSimulator object corresponding to a parameterized IQP circuit"""
 
-    def __init__(self, n_qubits: int, gates: list, device: str = "lightning.qubit",
-                 spin_sym: bool = False, init_gates: list = None,
+    def __init__(self, n_qubits: int, gates: list, device: str = "lightning.qubit", init_gates: list = None,
                  sparse: bool = False, bitflip: bool = False):
         """
         Args:
@@ -21,8 +21,6 @@ class IqpSimulator:
                 unique trainable parameter. Each sublist specifies the generators to which that parameter applies.
                 Generators are specified by listing the qubits on which an X operator acts.
             device (str, optional): Pennylane device used for calculating probabilities and sampling.
-            spin_sym (bool, optional): If True, the circuit is equivalent to one where the initial state
-                1/sqrt(2)(|00...0> + |11...1>) is used in place of |00...0>.
             init_gates (list[list[list[int]]], optional): A specification of gates of the same form as the gates argument. The
                 parameters of these gates will be defined by init_coefs later on.
             sparse (bool, optional): If True, generators and ops are always stored in sparse matrix format, leading
@@ -39,7 +37,6 @@ class IqpSimulator:
         self.sparse = sparse
         self.init_gates = init_gates
         self.device = device
-        self.spin_sym = spin_sym
         self.bitflip = bitflip
 
         self.generators = []
@@ -115,7 +112,7 @@ class IqpSimulator:
             self.trans_coef = jnp.array(self.trans_coef)
 
 
-    def iqp_circuit(self, params: jnp.ndarray, init_coefs: list = None):
+    def iqp_circuit(self, params: jnp.ndarray, init_state: list = None, init_coefs: list = None):
         """IQP circuit in pennylane form.
 
         Args:
@@ -124,8 +121,19 @@ class IqpSimulator:
                 values of init_gates.
         """
 
-        if self.spin_sym:
-            qml.PauliRot(2*jnp.pi/4, "Y"+"X"*(self.n_qubits-1), wires=range(self.n_qubits))
+        def rmi_vmap(X):
+            # vmap the ravel_multi_index function for efficient memory use
+            return jnp.ravel_multi_index(X, [2]*self.n_qubits, mode='wrap')
+
+        if init_state is not None:
+            X = init_state[0]
+            P = init_state[1]
+            state_idxs = jax.vmap(rmi_vmap)(X)
+            state_vec = np.zeros(2**self.n_qubits)
+            state_vec[state_idxs] = P
+            state_vec = jnp.array(state_vec)
+
+            qml.StatePrep(state_vec, wires=range(self.n_qubits))
 
         for i in range(self.n_qubits):
             qml.Hadamard(i)
@@ -142,7 +150,7 @@ class IqpSimulator:
         for i in range(self.n_qubits):
             qml.Hadamard(i)
 
-    def sample(self, params: jnp.ndarray, init_coefs: list = None, shots: int = 1) -> jnp.ndarray:
+    def sample(self, params: jnp.ndarray, init_state: list = None, init_coefs: list = None, shots: int = 1) -> jnp.ndarray:
         """Sample the IQP circuit using state vector simulation in Pennylane.
         Only possible for circuits with small numbers of qubits.
 
@@ -156,11 +164,11 @@ class IqpSimulator:
             jnp.ndarray: The bitstring samples.
         """
         if self.bitflip:
+            if init_state is not None:
+                raise Exception('Input state must be None for bitflip model.')
             samples = []
             for _ in range(shots):
                 sample = np.zeros(self.n_qubits)
-                if self.spin_sym:
-                    sample = (sample+1) % 2 if np.random.rand() > 0.5 else sample
 
                 if self.init_gates is not None:
                     for par, gate in zip(init_coefs, self.init_gates):
@@ -182,16 +190,49 @@ class IqpSimulator:
 
             @qml.qnode(dev)
             def sample_circuit(params):
-                self.iqp_circuit(params, init_coefs)
+                self.iqp_circuit(params, init_state, init_coefs)
                 return qml.sample(wires=range(self.n_qubits))
             return sample_circuit(params)
 
-    def probs(self, params: jnp.ndarray, init_coefs: list = None) -> jnp.ndarray:
+    def op_expval_pennylane(self, params: jnp.ndarray, op: jnp.array, init_state: list = None,
+                            init_coefs: list = None) -> float:
+        """
+        Compute the exact expectation value of a Z-type operator via Pennylane. i
+        Args:
+            params (jnp.ndarray): The parameters of the IQP gates.
+            op (jnp.ndarray): bitstring array that defines the Pauli-Z word operator.
+            init_state (list[jnp.ndarray]): a list [X,P] where X is a bitstring array containing the nonzero basis
+                elements that appear in the state, and P lists their corresponding amplitudes.
+            init_coefs (list[float], optional): List or array of length len(init_gates) that specifies the fixed parameter
+                values of init_gates.
+
+        Returns:
+            float: The computed expectation value
+        """
+        dev = qml.device(self.device, wires=self.n_qubits)
+
+        pl_ops = []
+        for i in range(self.n_qubits):
+            if op[i]==1:
+                pl_ops.append(qml.PauliZ(wires=i))
+
+        z_op = qml.prod(*pl_ops)
+
+        @qml.qnode(dev)
+        def expval_circuit(params):
+            self.iqp_circuit(params, init_state, init_coefs)
+            return qml.expval(z_op)
+
+        return float(expval_circuit(params))
+
+    def probs(self, params: jnp.ndarray, init_state: list = None, init_coefs: list = None) -> jnp.ndarray:
         """Returns the probabilities of all possible bitstrings using state vector simulation in
         PennyLane. Only possible for circuits with small numbers of qubits.
 
         Args:
             params (jnp.ndarray): The parameters of the IQP gates.
+            init_state (list[jnp.ndarray]): a list [X,P] where X is a bitstring array containing the nonzero basis
+                elements that appear in the state, and P lists their corresponding amplitudes.
             init_coefs (list[float], optional): List or array of length len(init_gates) that specifies the fixed parameter
                 values of init_gates.
 
@@ -206,7 +247,7 @@ class IqpSimulator:
 
         @qml.qnode(dev)
         def probs_circuit(params):
-            self.iqp_circuit(params, init_coefs)
+            self.iqp_circuit(params, init_state, init_coefs)
             return qml.probs(wires=range(self.n_qubits))
         return probs_circuit(params)
 
@@ -248,7 +289,7 @@ class IqpSimulator:
                 return op_expvals[0], op_expvals[1]
 
     def op_expval_batch(self, params: jnp.ndarray, ops: jnp.ndarray, n_samples: int,
-                        key: Array, init_coefs: list = None, indep_estimates: bool = False,
+                        key: Array, init_state: list = None, init_coefs: list = None, indep_estimates: bool = False,
                         return_samples: bool = False) -> list:
         """Estimate the expectation values of a batch of Pauli-Z type operators. A set of l operators must be specified
         by an array of shape (l,n_qubits), where each row is a binary vector that specifies on which qubit a Pauli Z
@@ -262,6 +303,8 @@ class IqpSimulator:
             ops (jnp.ndarray): Operator/s for those we want to know the expected value.
             n_samples (int): Number of samples used to calculate the IQP expectation value.
             key (Array): Jax key to control the randomness of the process.
+            init_state (list[jnp.ndarray]): a list [X,P] where X is a bitstring array containing the nonzero basis
+                elements that appear in the state, and P lists their corresponding amplitudes.
             init_coefs (list[float], optional): List or array of length len(init_gates) that specifies the fixed parameter
                 values of init_gates.
             indep_estimates (bool): Whether to use independent estimates of the ops in a batch (takes longer).
@@ -280,7 +323,12 @@ class IqpSimulator:
         effective_params = self.trans_par @ params if self.par_transform else params
         effective_params = effective_params + self.trans_coef @ init_coefs if self.init_gates is not None else effective_params
 
+        X = init_state[0] if init_state is not None else None
+        P = init_state[1] if init_state is not None else None
+
         if self.bitflip:
+            if init_state is not None:
+                raise Exception('Input state must be None for bitflip model.')
 
             if self.sparse or isinstance(ops, csr_matrix):
 
@@ -292,9 +340,6 @@ class IqpSimulator:
                     ops = csr_matrix(ops)
 
                 ops_gen = ops.dot(self.generators_sp.T)
-                
-                if self.spin_sym:
-                    ops_sum = np.squeeze(np.asarray(ops.sum(axis=-1)))
                     
                 del ops
 
@@ -303,17 +348,9 @@ class IqpSimulator:
 
             else:
                 ops_gen = (ops @ self.generators.T) % 2
-                if self.spin_sym:
-                    ops_sum = jnp.sum(ops, axis=-1)
                 
             par_ops_gates = 2 * effective_params * ops_gen
-
             expvals = jnp.prod(jnp.cos(par_ops_gates), axis=-1)
-
-            if self.spin_sym:
-                # flip expvals of odd operators with prob 1/2
-                odd_ops = 1 - 2 * (ops_sum % 2)
-                expvals = 0.5*expvals + 0.5*odd_ops*expvals
 
             if return_samples:
                 return jnp.expand_dims(expvals, -1)
@@ -340,44 +377,33 @@ class IqpSimulator:
             samples_gates = samples_gates.toarray()
             samples_gates = 1 - samples_gates
 
-            if self.spin_sym:
-                ops_sum = np.squeeze(np.asarray(ops.sum(axis=-1)))
-                samples_sum = np.squeeze(np.asarray(samples.sum(axis=-1)))
-                samples_len = samples.shape[0]
             del ops            
             del samples
 
         else:
             ops_gen = (ops @ self.generators.T) % 2
             samples_gates = 1 - 2 * ((samples @ self.generators.T) % 2)
-            if self.spin_sym:
-                ops_sum = ops.sum(axis=-1)
-                samples_sum = samples.sum(axis=-1)
-                samples_len = samples.shape[0]
 
-        if self.spin_sym:
-            try:
-                shape = (len(ops_sum), samples_len)
-            except:
-                shape = (samples_len, )
-            
-            ini_spin_sym = 2 - jnp.repeat(ops_sum, samples_len).reshape(shape) % 2 - 2*(samples_sum % 2)
-            
-        else:
-            ini_spin_sym = 1
-        # ini_spin_sym = jnp.where(self.spin_sym, ini_spin_sym, 1)
 
         par_ops_gates = 2 * effective_params * ops_gen
-        expvals = ini_spin_sym * jnp.cos(par_ops_gates @ samples_gates.T)
 
+        if init_state is not None:
+            state_samples = (1 - 2 * ((X @ samples.T) % 2))
+            amps_state_samples = jnp.expand_dims(P, -1) * state_samples
+            state_ops = 1 - 2 * ((X @ ops.T) % 2)
+            samples_ops = amps_state_samples.T @ state_ops
+            samples_ops = samples_ops * jnp.expand_dims(jnp.sum(amps_state_samples, axis=0), -1)
+            expvals = jnp.cos(par_ops_gates @ samples_gates.T)*samples_ops.T
+        else:
+            expvals = jnp.cos(par_ops_gates @ samples_gates.T)
 
         if return_samples:
             return expvals
         else:
             return jnp.mean(expvals, axis=-1), jnp.std(expvals, axis=-1, ddof=1)/jnp.sqrt(n_samples)
 
-    def op_expval(self, params: jnp.ndarray, ops: jnp.ndarray, n_samples: int, key: Array, init_coefs: list = None,
-                  indep_estimates: bool = False, return_samples: bool = False,
+    def op_expval(self, params: jnp.ndarray, ops: jnp.ndarray, n_samples: int, key: Array, init_state: list = None,
+                  init_coefs: list = None, indep_estimates: bool = False, return_samples: bool = False,
                   max_batch_ops: int = None, max_batch_samples: int = None) -> list:
         """Estimate the expectation values of a batch of Pauli-Z type operators. A set of l operators must be specified
         by an array of shape (l,n_qubits), where each row is a binary vector that specifies on which qubit a Pauli Z
@@ -394,6 +420,8 @@ class IqpSimulator:
             n_samples (int): Number of samples used to calculate the IQP expectation values. Higher values result in
                 higher precision.
             key (Array): Jax key to control the randomness of the process.
+            init_state (list[jnp.ndarray]): a list [X,P] where X is a bitstring array containing the nonzero basis
+                elements that appear in the state, and P lists their corresponding amplitudes.
             init_coefs (list[float], optional): List or array of length len(init_gates) that specifies the fixed parameter
                 values of init_gates.
             indep_estimates (bool): Whether to use independent estimates of the ops in a batch.
@@ -431,7 +459,7 @@ class IqpSimulator:
                 batch_n_samples = min(max_batch_samples, n_samples - i * max_batch_samples)
                 key, subkey = jax.random.split(key, 2)
                 batch_expval = self.op_expval_batch(
-                    params, batch_ops, batch_n_samples, subkey, init_coefs,
+                    params, batch_ops, batch_n_samples, subkey, init_state, init_coefs,
                     indep_estimates, return_samples=True
                 )
                 tmp_expvals = jnp.concatenate((tmp_expvals, batch_expval), axis=-1)
