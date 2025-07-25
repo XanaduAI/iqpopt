@@ -378,7 +378,7 @@ class IqpSimulator:
 
     def op_expval(self, params: jnp.ndarray, ops: jnp.ndarray, n_samples: int, key: Array, init_coefs: list = None,
                   indep_estimates: bool = False, return_samples: bool = False,
-                  max_batch_ops: int = None, max_batch_samples: int = None) -> list:
+                  max_batch_ops: int = None, max_batch_samples: int = None, use_lax=False) -> list:
         """Estimate the expectation values of a batch of Pauli-Z type operators. A set of l operators must be specified
         by an array of shape (l,n_qubits), where each row is a binary vector that specifies on which qubit a Pauli Z
         operator acts.
@@ -401,6 +401,8 @@ class IqpSimulator:
                 of the n_samples samples is returned.
             max_batch_ops (int): Maximum number of operators in a batch. Defaults to None, which means taking all ops at once.
             max_batch_samples (int): Maximum number of samples in a batch. Defaults to None, which means taking all n_samples at once.
+            use_lax (bool): If True, jax.lax is used to compile the loops over batches of ops and samples. This can be significantly
+                faster when combining with jax.jit.
 
         Returns:
             list: List of Vectors. The expected value of each op and its standard deviation.
@@ -419,50 +421,73 @@ class IqpSimulator:
             n_samples = max_batch_samples
 
         init_coefs = jnp.array(init_coefs) if init_coefs is not None else None
-
-        # Pad ops so its length is a multiple of max_batch_ops
-        op_pad_len = (max_batch_ops - ops.shape[0] % max_batch_ops) % max_batch_ops
-        padded_ops = jnp.pad(ops, ((0, op_pad_len), (0, 0)))
-        num_op_batches = padded_ops.shape[0] // max_batch_ops
-
         num_sample_batches = int(np.ceil(n_samples / max_batch_samples))
 
-        def sample_loop_body(i, state):
-            key, accumulated_expvals = state
-            key, subkey = jax.random.split(key)
+        if use_lax:
+            # Pad ops so its length is a multiple of max_batch_ops
+            op_pad_len = (max_batch_ops - ops.shape[0] % max_batch_ops) % max_batch_ops
+            padded_ops = jnp.pad(ops, ((0, op_pad_len), (0, 0)))
+            num_op_batches = padded_ops.shape[0] // max_batch_ops
 
-            def op_loop_body(j, expvals_for_sample_batch):
-                op_start_idx = j * max_batch_ops
-                batch_ops = jax.lax.dynamic_slice(
-                    padded_ops, (op_start_idx, 0), (max_batch_ops, padded_ops.shape[1])
+            def sample_loop_body(i, state):
+                key, accumulated_expvals = state
+                key, subkey = jax.random.split(key)
+
+                def op_loop_body(j, expvals_for_sample_batch):
+                    op_start_idx = j * max_batch_ops
+                    batch_ops = jax.lax.dynamic_slice(
+                        padded_ops, (op_start_idx, 0), (max_batch_ops, padded_ops.shape[1])
+                    )
+
+                    batch_expval = self.op_expval_batch(
+                        params, batch_ops, max_batch_samples, subkey, init_coefs,
+                        indep_estimates, return_samples=True
+                    )
+
+                    return jax.lax.dynamic_update_slice(
+                        expvals_for_sample_batch, batch_expval, (op_start_idx, 0)
+                    )
+
+                # Run the inner loop over operator batches
+                init_inner_results = jnp.zeros((padded_ops.shape[0], max_batch_samples))
+                expvals_one_sample_batch = jax.lax.fori_loop(0, num_op_batches, op_loop_body, init_inner_results)
+
+                # Update the total results array with the results from this sample batch
+                sample_start_idx = i * max_batch_samples
+                updated_total_expvals = jax.lax.dynamic_update_slice(
+                    accumulated_expvals, expvals_one_sample_batch, (0, sample_start_idx)
                 )
 
-                batch_expval = self.op_expval_batch(
-                    params, batch_ops, max_batch_samples, subkey, init_coefs,
-                    indep_estimates, return_samples=True
-                )
+                return key, updated_total_expvals
 
-                return jax.lax.dynamic_update_slice(
-                    expvals_for_sample_batch, batch_expval, (op_start_idx, 0)
-                )
+            total_padded_samples = num_sample_batches * max_batch_samples
+            init_outer_state = (key, jnp.zeros((padded_ops.shape[0], total_padded_samples)))
 
-            # Run the inner loop over operator batches
-            init_inner_results = jnp.zeros((padded_ops.shape[0], max_batch_samples))
-            expvals_one_sample_batch = jax.lax.fori_loop(0, num_op_batches, op_loop_body, init_inner_results)
+            _, padded_expvals = jax.lax.fori_loop(0, num_sample_batches, sample_loop_body, init_outer_state)
+            expvals = padded_expvals[:ops.shape[0], :n_samples]
 
-            # Update the total results array with the results from this sample batch
-            sample_start_idx = i * max_batch_samples
-            updated_total_expvals = jax.lax.dynamic_update_slice(
-                accumulated_expvals, expvals_one_sample_batch, (0, sample_start_idx)
-            )
+        else:
+            # List to store results from each batch of samples
+            expvals_across_samples = []
 
-            return key, updated_total_expvals
+            # Outer loop: Iterate over batches of samples
+            for i in range(num_sample_batches):
+                batch_n_samples = min(max_batch_samples, n_samples - i * max_batch_samples)
+                key, subkey = jax.random.split(key, 2)
+                expvals_across_ops = []
 
-        total_padded_samples = num_sample_batches * max_batch_samples
-        init_outer_state = (key, jnp.zeros((padded_ops.shape[0], total_padded_samples)))
+                num_op_batches = int(np.ceil(ops.shape[0] / max_batch_ops))
+                for batch_ops in jnp.array_split(ops, num_op_batches):
+                    batch_expval = self.op_expval_batch(
+                        params, batch_ops, batch_n_samples, subkey, init_coefs,
+                        indep_estimates, return_samples=True
+                    )
+                    expvals_across_ops.append(batch_expval)
 
-        _, padded_expvals = jax.lax.fori_loop(0, num_sample_batches, sample_loop_body, init_outer_state)
-        expvals = padded_expvals[:ops.shape[0], :n_samples]
+                expvals_for_sample_batch = jnp.concatenate(expvals_across_ops, axis=0)
+                expvals_across_samples.append(expvals_for_sample_batch)
+
+            expvals = jnp.concatenate(expvals_across_samples, axis=-1)
 
         if self.bitflip:
             if return_samples:
