@@ -406,8 +406,66 @@ class IqpSimulator:
             list: List of Vectors. The expected value of each op and its standard deviation.
         """
 
+        # if max_batch_ops is None:
+        #     max_batch_ops = len(ops)
+        #
+        # if max_batch_samples is None:
+        #     max_batch_samples = n_samples
+        #
+        # if self.bitflip:
+        #     n_samples = max_batch_samples
+        #
+        # if len(ops.shape) == 1:
+        #     ops = ops.reshape(1, -1)
+        #
+        # if self.bitflip:
+        #     expvals = jnp.empty((0, 1))
+        # else:
+        #     expvals = jnp.empty((0, n_samples))
+        #
+        # init_coefs = jnp.array(init_coefs) if init_coefs is not None else None
+        # expvals_across_samples = []
+        #
+        # # Iterate over batches of samples
+        # num_sample_batches = int(np.ceil(n_samples / max_batch_samples))
+        # for i in range(num_sample_batches):
+        #     batch_n_samples = min(max_batch_samples, n_samples - i * max_batch_samples)
+        #     key, subkey = jax.random.split(key, 2)
+        #     expvals_across_ops = []
+        #     # Inner loop: Iterate over batches of operators
+        #     num_op_batches = int(np.ceil(ops.shape[0] / max_batch_ops))
+        #     for batch_ops in jnp.array_split(ops, num_op_batches):
+        #         batch_expval = self.op_expval_batch(
+        #             params, batch_ops, batch_n_samples, subkey, init_coefs,
+        #             indep_estimates, return_samples=True
+        #         )
+        #         expvals_across_ops.append(batch_expval)
+        #
+        #     # Concatenate results from all operator batches for the current sample batch
+        #     expvals_for_sample_batch = jnp.concatenate(expvals_across_ops, axis=0)
+        #     expvals_across_samples.append(expvals_for_sample_batch)
+        #
+        # # Concatenate results from all sample batches to form the final array
+        # expvals = jnp.concatenate(expvals_across_samples, axis=-1)
+        # if self.bitflip:
+        #     if return_samples:
+        #         return expvals
+        #     else:
+        #         return jnp.mean(expvals, axis=-1), jnp.zeros(len(ops))
+        # else:
+        #     if return_samples:
+        #         return expvals
+        #     else:
+        #         return jnp.mean(expvals, axis=-1), jnp.std(expvals, axis=-1, ddof=1)/jnp.sqrt(n_samples)
+
+        # --- Initial Setup ---
+        if ops.ndim == 1:
+            ops = ops.reshape(1, -1)
+
+        original_ops_shape = ops.shape
+
         if max_batch_ops is None:
-            max_batch_ops = len(ops)
+            max_batch_ops = ops.shape[0]
 
         if max_batch_samples is None:
             max_batch_samples = n_samples
@@ -415,35 +473,69 @@ class IqpSimulator:
         if self.bitflip:
             n_samples = max_batch_samples
 
-        if len(ops.shape) == 1:
-            ops = ops.reshape(1, -1)
-
-        if self.bitflip:
-            expvals = jnp.empty((0, 1))
-        else:
-            expvals = jnp.empty((0, n_samples))
-
         init_coefs = jnp.array(init_coefs) if init_coefs is not None else None
-        
-        for batch_ops in jnp.array_split(ops, np.ceil(ops.shape[0] / max_batch_ops)):
-            tmp_expvals = jnp.empty((len(batch_ops), 0))
-            for i in range(np.ceil(n_samples / max_batch_samples).astype(jnp.int64)):
-                batch_n_samples = min(max_batch_samples, n_samples - i * max_batch_samples)
-                key, subkey = jax.random.split(key, 2)
+
+        # --- Padding for lax loops ---
+        # Pad ops so its length is a multiple of max_batch_ops
+        op_pad_len = (max_batch_ops - ops.shape[0] % max_batch_ops) % max_batch_ops
+        padded_ops = jnp.pad(ops, ((0, op_pad_len), (0, 0)))
+        num_op_batches = padded_ops.shape[0] // max_batch_ops
+
+        # Calculate number of sample batches. We always process max_batch_samples per batch.
+        num_sample_batches = int(np.ceil(n_samples / max_batch_samples))
+
+        # --- JIT-friendly Loop Definition ---
+        def sample_loop_body(i, state):
+            key, accumulated_expvals = state
+            key, subkey = jax.random.split(key)
+
+            # Define inner loop body here to capture the correct subkey for this sample batch
+            def op_loop_body(j, expvals_for_sample_batch):
+                op_start_idx = j * max_batch_ops
+                batch_ops = jax.lax.dynamic_slice(
+                    padded_ops, (op_start_idx, 0), (max_batch_ops, padded_ops.shape[1])
+                )
+
                 batch_expval = self.op_expval_batch(
-                    params, batch_ops, batch_n_samples, subkey, init_coefs,
+                    params, batch_ops, max_batch_samples, subkey, init_coefs,
                     indep_estimates, return_samples=True
                 )
-                tmp_expvals = jnp.concatenate((tmp_expvals, batch_expval), axis=-1)
-            expvals = jnp.concatenate((expvals, tmp_expvals), axis=0)
 
+                return jax.lax.dynamic_update_slice(
+                    expvals_for_sample_batch, batch_expval, (op_start_idx, 0)
+                )
+
+            # Run the inner loop over operator batches
+            init_inner_results = jnp.zeros((padded_ops.shape[0], max_batch_samples))
+            expvals_one_sample_batch = jax.lax.fori_loop(0, num_op_batches, op_loop_body, init_inner_results)
+
+            # Update the total results array with the results from this sample batch
+            sample_start_idx = i * max_batch_samples
+            updated_total_expvals = jax.lax.dynamic_update_slice(
+                accumulated_expvals, expvals_one_sample_batch, (0, sample_start_idx)
+            )
+
+            return key, updated_total_expvals
+
+        # --- Execute Main Loop ---
+        total_padded_samples = num_sample_batches * max_batch_samples
+        init_outer_state = (key, jnp.zeros((padded_ops.shape[0], total_padded_samples)))
+
+        _, padded_expvals = jax.lax.fori_loop(0, num_sample_batches, sample_loop_body, init_outer_state)
+
+        # --- Post-processing ---
+        # Unpad the final results array to the original requested dimensions
+        expvals = padded_expvals[:ops.shape[0], :n_samples]
+
+        # Final processing and return logic
         if self.bitflip:
             if return_samples:
                 return expvals
             else:
-                return jnp.mean(expvals, axis=-1), jnp.zeros(len(ops))
+                return jnp.mean(expvals, axis=-1), jnp.zeros(ops.shape[0])
         else:
             if return_samples:
                 return expvals
             else:
-                return jnp.mean(expvals, axis=-1), jnp.std(expvals, axis=-1, ddof=1)/jnp.sqrt(n_samples)
+                std_err = jnp.std(expvals, axis=-1, ddof=1) / jnp.sqrt(n_samples)
+                return jnp.mean(expvals, axis=-1), std_err
