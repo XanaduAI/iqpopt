@@ -178,8 +178,9 @@ class IqpSimulator:
             return jnp.array(samples)
 
         else:
-            dev = qml.device(self.device, wires=self.n_qubits, shots=shots)
+            dev = qml.device(self.device, wires=self.n_qubits)
 
+            @qml.set_shots(shots)
             @qml.qnode(dev)
             def sample_circuit(params):
                 self.iqp_circuit(params, init_coefs)
