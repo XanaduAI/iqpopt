@@ -2,14 +2,14 @@ import numpy as np
 import pennylane as qml
 from itertools import product
 
-def penn_obs(op: np.ndarray) -> qml.operation.Observable:
+def penn_obs(op: np.ndarray):
     """Returns a pennylane observable from a bitstring representation.
 
     Args:
         op (np.ndarray): Bitstring representation of the Z operator.
 
     Returns:
-        qml.Observable: Pennylane observable.
+        Pennylane observable.
     """
     for i, z in enumerate(op):
         if i==0:
@@ -22,7 +22,7 @@ def penn_obs(op: np.ndarray) -> qml.operation.Observable:
                 obs @= qml.Z(i)
     return obs
 
-def penn_op_expval_circ(iqp_circuit, params: np.ndarray, op: np.ndarray, init_coefs: list = None) -> qml.measurements.ExpectationMP:
+def penn_op_expval_circ(iqp_circuit, params: np.ndarray, op: np.ndarray, init_coefs: list = None):
     """Defines the circuit that calculates the expectation value of the operator with the IQP circuit with pennylane tools.
 
     Args:
@@ -32,7 +32,7 @@ def penn_op_expval_circ(iqp_circuit, params: np.ndarray, op: np.ndarray, init_co
                 values of init_gates.
 
     Returns:
-        qml.measurements.ExpectationMP: Pennylane circuit with an expectation value.
+        Pennylane circuit with an expectation value.
     """
     iqp_circuit.iqp_circuit(params, init_coefs)
     obs = penn_obs(op)
@@ -64,7 +64,7 @@ def penn_x_circuit(x: np.ndarray):
         if b:
             qml.X(i)
 
-def penn_train_expval(x: np.ndarray, op: np.ndarray) -> qml.measurements.ExpectationMP:
+def penn_train_expval(x: np.ndarray, op: np.ndarray):
     """Defines the circuit that calculates the expectation value of the operator with the training circuit with pennylane tools.
 
     Args:
@@ -72,7 +72,7 @@ def penn_train_expval(x: np.ndarray, op: np.ndarray) -> qml.measurements.Expecta
         op (np.ndarray): Bitstring representing the observable that we want to measure.
 
     Returns:
-        qml.measurements.ExpectationMP: Pennylane circuit with an expectation value.
+        Pennylane circuit with an expectation value.
     """
     penn_x_circuit(x)
     obs = penn_obs(op)
