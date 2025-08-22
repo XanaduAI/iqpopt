@@ -178,8 +178,9 @@ class IqpSimulator:
             return jnp.array(samples)
 
         else:
-            dev = qml.device(self.device, wires=self.n_qubits, shots=shots)
+            dev = qml.device(self.device, wires=self.n_qubits)
 
+            @qml.set_shots(shots)
             @qml.qnode(dev)
             def sample_circuit(params):
                 self.iqp_circuit(params, init_coefs)
@@ -407,6 +408,9 @@ class IqpSimulator:
         Returns:
             list: List of Vectors. The expected value of each op and its standard deviation.
         """
+
+        if self.init_gates is not None and init_coefs is None:
+            raise ValueError("init_coefs cannot be None if init_gates are specified")
 
         if ops.ndim == 1:
             ops = ops.reshape(1, -1)
