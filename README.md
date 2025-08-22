@@ -40,34 +40,8 @@ For example, in the above the function
 `local_gates` returns `gates = [[[0]],[[1]],[[0,1]]]` which specifies three trainable parameters with gate generators
 $X_0$, $X_1$ and $X_0X_1$. 
 
-One can also specify some gates to have fixed, non-trainable parameters. For example,
-
-
-[//]: # (The gate list )
-
-[//]: # ()
-[//]: # (```python)
-
-[//]: # (gates = [[[0],[1]], [[0,1]]])
-
-[//]: # (```)
-
-[//]: # ()
-[//]: # (assigns the *same* trainable parameter to the generators $X_0$, $X_1$ and a second trainable parameter)
-
-[//]: # (to the generator $X_0X_1$. )
-
-[//]: # ()
-[//]: # (Non-trainable gates can be specified by the optional arguments `init_gates` and `init_coefs`. For example,)
-
-```python
-circuit = iqp.IqpSimulator(n_qubits, gates = [[[0]],[[1]]], init_gates = [[[0,1]]])
-```
-defines a circuit with two trainable gates with generators $X_0$ and $X_1$ and one non-trainable gate with generator $X_0X_1$ that will be applied at the start of the circuit. When evaluating the expectation value of the circuit, both parameters for the trainable gates (`params`) and parameters for the non-trainable ones (`init_coefs`) have to be specified.
-
 > **Note**: For very large problems it can be useful to initialize the circuit with the option `sparse=True`. 
 > This uses scipy sparse matrix multiplication in place of JAX and can be significantly more memory efficient.
-
 
 ## Expectation values
 IQPopt has been designed for fast evaluation of expectation values of Pauli Z tensors.
