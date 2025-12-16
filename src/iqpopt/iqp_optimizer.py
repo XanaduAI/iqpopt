@@ -401,11 +401,17 @@ class IqpSimulator:
             return_samples (bool): if True, an extended array that contains the values of the estimator for each
                 of the n_samples samples is returned.
             max_batch_ops (int): Maximum number of operators in a batch. Defaults to None, which means taking all ops at once.
+                Can only be used if ops is a jnp.array
             max_batch_samples (int): Maximum number of samples in a batch. Defaults to None, which means taking all n_samples at once.
 
         Returns:
             list: List of Vectors. The expected value of each op and its standard deviation.
         """
+
+        # do not batch ops if ops is sparse
+        if isinstance(ops, csr_matrix):
+            return self.op_expval_batch(
+                    params, ops, n_samples, key, init_coefs, indep_estimates, return_samples)
 
         if max_batch_ops is None:
             max_batch_ops = len(ops)
