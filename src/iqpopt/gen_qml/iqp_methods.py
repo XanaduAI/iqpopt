@@ -19,7 +19,7 @@ def loss_estimate_iqp(params: jnp.ndarray, iqp_circuit: IqpSimulator, ground_tru
         ground_truth (jnp.ndarray): Matrix with the training samples as rows (0s and 1s).
         visible_ops (jnp.ndarray): Matrix with only the visible operators as rows (0s and 1s). Used to estimate the training part of the loss.
         all_ops (jnp.ndarray): Matrix with the all the operators as rows (0s and 1s). Used to estimate the IQP part of the loss.
-        n_samples (jnp.ndarray): Number of samples used to estimate the loss.
+        n_samples (int): Number of samples used to estimate the loss.
         key (Array): Jax key to control the randomness of the process.
         init_coefs (list[float], optional): List or array of length len(init_gates) that specifies the fixed parameter
                 values of init_gates.
@@ -70,7 +70,7 @@ def mmd_loss_iqp(params: jnp.ndarray, iqp_circuit: IqpSimulator, ground_truth: j
         sigma (float or list): The bandwidth of the kernel. If several are given as a list the average loss over each value will
             be returned.
         n_ops (int): Number of operators used to estimate the loss.
-        n_samples (jnp.ndarray): Number of samples used to estimate the loss.
+        n_samples (int): Number of samples used to estimate the loss.
         key (jax.random.PRNGKey): Jax PRNG key used to seed random functions.
         init_coefs (list[float], optional): List or array of length len(init_gates) that specifies the fixed parameter
                 values of init_gates.
