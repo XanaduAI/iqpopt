@@ -279,7 +279,7 @@ class IqpSimulator:
         samples = jax.random.randint(key, (n_samples, self.n_qubits), 0, 2)
         
         effective_params = self.trans_par @ params if self.par_transform else params
-        effective_params = effective_params + self.trans_coef @ init_coefs if self.init_gates is not None else effective_params
+        effective_params = effective_params + self.trans_coef @ jnp.asarray(init_coefs, dtype=self.trans_coef.dtype) if self.init_gates is not None else effective_params
 
         if self.bitflip:
 
