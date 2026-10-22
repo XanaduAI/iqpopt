@@ -1,5 +1,5 @@
 > [!NOTE]
-> Development of train classical deploy quantum models has now moved to the [tcdq module of PennyLane Labs]([https://example.com](https://docs.pennylane.ai/en/latest/code/api/pennylane.labs.tcdq.html#module-pennylane.labs.tcdq))
+> Development of train classical deploy quantum models has now moved to the [tcdq module of PennyLane Labs](https://docs.pennylane.ai/en/latest/code/api/pennylane.labs.tcdq.html#module-pennylane.labs.tcdq)
 
 # IQPopt - IQP circuit optimization with JAX
 IQPopt is a package designed for fast optimization of parameterized Instantaneous quantum polynomial (IQP) circuits 
